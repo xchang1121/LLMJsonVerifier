@@ -1,0 +1,96 @@
+{
+  "executed_at_utc": "2026-09-17T07:41:46.428038+00:00",
+  "platform": "Windows",
+  "python": "3.12.14",
+  "checks": {
+    "pytest_with_real_tokenizer": {
+      "tests": 58,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "ruff_check": "passed",
+    "ruff_format_check": "passed",
+    "python_build_sdist_and_wheel": "passed",
+    "pip_check": "passed",
+    "archive_private_files_and_weights_check": "passed"
+  },
+  "tokenizer": {
+    "model": "Qwen/Qwen3.8-27B",
+    "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+    "fingerprint": "a4fdee67a7bc6a53aa6b968778fe8211fad5065362f75894f123e5c809cd0cff",
+    "available_codes": 588,
+    "configured_max_options": 256,
+    "first_codes": [
+      [
+        "A",
+        32
+      ],
+      [
+        "B",
+        33
+      ],
+      [
+        "C",
+        34
+      ],
+      [
+        "D",
+        35
+      ],
+      [
+        "E",
+        36
+      ],
+      [
+        "F",
+        37
+      ],
+      [
+        "G",
+        38
+      ],
+      [
+        "H",
+        39
+      ]
+    ]
+  },
+  "tokenizer_file_sha256": {
+    "chat_template.jinja": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+    "config.json": "191e0af232104ed8b65258cf3fb2b842e288008baca7633c11b82a1ac7203aab",
+    "merges.txt": "a9d356d7bdf1ef4949e3e748e95b8e10ad9d4e2e838eddc38a0a7b6b94d1db8d",
+    "tokenizer.json": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+    "tokenizer_config.json": "b11349aafa7cdc6a320767cf7ceb29ed82f7eda5d65e8e0819e76f0ce947bf27",
+    "vocab.json": "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003"
+  },
+  "tested_gateway_dependencies": {
+    "fastapi": "0.141.1",
+    "starlette": "1.6.0",
+    "httpx": "0.28.1",
+    "pydantic": "2.13.5",
+    "uvicorn": "0.53.0",
+    "transformers": "5.17.0",
+    "tokenizers": "0.23.2",
+    "huggingface-hub": "1.31.0",
+    "jinja2": "3.1.6",
+    "pytest": "9.1.1",
+    "ruff": "0.16.8"
+  },
+  "vllm_target_version": "0.29.0",
+  "vllm_contract_review": "Pinned source reviewed for completion token-ID logprobs, token limit, cache stats, tokenizer endpoint and launcher flags; not engine execution.",
+  "not_run": [
+    "27B model loading or inference",
+    "GPU/kernel compatibility",
+    "real vLLM HTTP integration and cache parity",
+    "hardware throughput/latency/peak memory",
+    "ground-truth classification accuracy or calibration",
+    "Docker image builds and container startup",
+    "local Docker Compose validation (Docker CLI unavailable)"
+  ],
+  "model_weights_downloaded": false,
+  "notes": [
+    "Two upstream Starlette test-client deprecation warnings; no test failures.",
+    "CPU mock protocol tests are not real model results."
+  ]
+}
