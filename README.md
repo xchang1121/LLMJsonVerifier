@@ -104,10 +104,14 @@ llmjv doctor --config configs/qwen3.8-27b.toml
 llmjv doctor --config configs/qwen3.8-27b.toml --backend
 llmjv verify-cache --input examples/classify.json
 llmjv evaluate --dataset examples/eval.jsonl --rotate
+llmjv evaluate --dataset examples/regression.jsonl --rotate --records runs/regression.jsonl
+llmjv make-dataset --output runs/long-context.jsonl --context-chars 16000 64000 --positions start middle end
 llmjv benchmark --input examples/classify.json --cache-mode cold --repeats 20
-llmjv benchmark --input examples/classify.json --cache-mode warm --repeats 20 --concurrency 4
+llmjv benchmark --input examples/classify.json --cache-mode warm --repeats 20 --concurrency 4 --records runs/warm.jsonl
 ```
 
-`verify-cache` 用长文样本比较冷、热缓存的概率结果并检查实际命中；`evaluate` 报告 accuracy、NLL、Brier、ECE 和候选轮转一致率；`benchmark` 报告吞吐量、延迟分位数及缓存统计。
+`verify-cache` 用长文样本比较冷、热缓存的概率结果并检查实际命中；`evaluate` 报告 accuracy、NLL、Brier、ECE、覆盖率和候选轮转一致率；`benchmark` 报告成功吞吐量、延迟分位数及缓存统计。`--records` 将每次请求的输入、输出、耗时和错误状态写入新 JSONL 文件。
+
+回归样本覆盖事实缺失、改写、否定、矛盾和注入文本。`make-dataset` 按字符长度生成长文，并把证据放在指定位置。
 
 详细说明：[工作原理](docs/architecture.md) · [部署指南](docs/deployment.md) · [验证与数据格式](docs/validation.md) · [测试记录](docs/validation-report.json)。

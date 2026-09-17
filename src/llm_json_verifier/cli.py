@@ -36,15 +36,27 @@ def parser() -> argparse.ArgumentParser:
         if name == "evaluate":
             command.add_argument("--dataset", required=True)
             command.add_argument("--rotate", action="store_true")
+            command.add_argument("--seed", type=int)
         else:
             command.add_argument("--input", required=True)
         if name == "benchmark":
             command.add_argument("--repeats", type=int, default=20)
-            command.add_argument("--concurrency", type=int, default=1)
             command.add_argument("--warmup", type=int, default=1)
             command.add_argument("--cache-mode", choices=("warm", "cold"), default="warm")
+        if name in {"benchmark", "evaluate"}:
+            command.add_argument("--concurrency", type=int, default=1)
+            command.add_argument("--records", help="write per-request JSONL to a new file")
         if name == "verify-cache":
             command.add_argument("--tolerance", type=float, default=1e-3)
+    dataset = commands.add_parser("make-dataset")
+    dataset.add_argument("--output", required=True)
+    dataset.add_argument("--context-chars", type=int, nargs="+", default=[0])
+    dataset.add_argument(
+        "--positions",
+        nargs="+",
+        choices=("start", "middle", "end"),
+        default=["start", "middle", "end"],
+    )
     return root
 
 
@@ -53,18 +65,34 @@ async def remote(args) -> int:
 
     async with GatewayClient(args.url) as client:
         if args.command == "evaluate":
-            result = await evaluate(client, args.dataset, args.rotate)
+            result = await evaluate(
+                client, args.dataset, args.rotate, args.records, args.concurrency, args.seed
+            )
         else:
             request = read_request(args.input)
             if args.command == "classify":
                 result = (await client.classify(request)).model_dump()
             elif args.command == "benchmark":
                 result = await benchmark(
-                    client, request, args.repeats, args.concurrency, args.warmup, args.cache_mode
+                    client,
+                    request,
+                    args.repeats,
+                    args.concurrency,
+                    args.warmup,
+                    args.cache_mode,
+                    args.records,
                 )
             else:
                 result = await verify_cache(client, request, args.tolerance)
         emit(result)
+        if args.command in {"benchmark", "evaluate"}:
+            return int(
+                bool(
+                    result["failed"]
+                    or result.get("rotation_outcomes", {}).get("failed")
+                    or result.get("warmup_outcomes", {}).get("failed")
+                )
+            )
         return 1 if args.command == "verify-cache" and not result["passed"] else 0
 
 
@@ -92,6 +120,15 @@ async def doctor(settings, backend: bool) -> None:
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
+        if args.command == "make-dataset":
+            from .datasets import write_regression_dataset
+
+            emit(
+                write_regression_dataset(
+                    args.output, tuple(args.context_chars), tuple(args.positions)
+                )
+            )
+            return 0
         if args.command in {"classify", "benchmark", "evaluate", "verify-cache"}:
             return asyncio.run(remote(args))
         settings = load_settings(args.config)

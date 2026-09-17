@@ -50,6 +50,27 @@ JSONL 每行格式：
 
 评测指标：accuracy、负对数似然 NLL、未除以类别数的 multiclass Brier、10 个等宽区间的 top-label ECE。选项轮转测试只做一次循环置换，用于暴露明显的位置偏好，不等价于遍历所有排列，也不能证明不存在偏差。
 
+## 可复现记录
+
+`evaluate` 和 `benchmark` 支持 `--records runs/new-run.jsonl`，以独占创建方式保存新文件。记录包含运行参数、输入 SHA-256、客户端版本，以及每次请求的完整输入、响应、耗时和 `succeeded` / `failed` / `canceled` 状态。评测记录还包含样本 ID、标签和预期答案；最后一行是汇总。每次完成后立即刷新文件，中断的运行保留已写入记录。日志包含原始文档，按评测数据管理。
+
+单次请求失败后继续本轮测试；失败数量大于零时 CLI 返回非零退出码。预热和候选轮转有独立统计。成功请求的延迟位于 `latency_ms`，全部已完成尝试的延迟位于 `all_outcomes_latency_ms`。吞吐量为成功请求数除以测量阶段墙钟时间，包含日志开销；token 统计汇总成功响应报告的用量。
+
+评测先校验全部 JSONL 行再发送请求。`accuracy`、NLL、Brier 和 ECE 使用成功响应；`question_coverage` 是成功评分问题的比例，`end_to_end_accuracy` 将失败请求中的问题也计入分母，`exact_match_rate` 要求一个样本的全部问题均正确。全失败时成功样本指标为 `null`。`mismatches` 列出成功响应中判错的问题。轮转一致率只使用原始请求与轮转请求都成功的配对，另报配对覆盖率。
+
+`--concurrency N` 限制客户端活动请求数，`evaluate --seed N` 确定性打乱请求顺序；实际顺序写入日志。每行可增加唯一 `id` 和字符串数组 `tags`。
+
+## 回归样本
+
+`examples/regression.jsonl` 包含 4 个事实的全部 16 种出现组合，以及改写、否定、矛盾、注入文本，共 20 个样本、80 道问题。标签由构造规则确定。
+
+```bash
+llmjv make-dataset --output runs/long.jsonl --context-chars 0 16000 64000 --positions start middle end
+llmjv evaluate --dataset runs/long.jsonl --rotate --concurrency 4 --seed 42 --records runs/long-results.jsonl
+```
+
+`--context-chars` 是文档的最小字符长度，`0` 保留短原文；每个非零长度分别生成指定证据位置的版本。模型上下文限额按完整提示词的 token 数检查。业务正确率应另外使用独立的人工标注集评测。
+
 需要重点覆盖：信息不足、互相矛盾的文档、多项近义候选、不同位置的证据、提示注入文本、超长干扰文本、不同文体和语言。候选集合应尽量互斥并覆盖业务状态。开放世界任务应提供“其他/不适用/信息不足”，但仅增加这些选项也不保证模型会正确使用。
 
 低熵、高 margin 或高 confidence 不足以证明正确，阈值应在独立验证集上选择并在测试集上报告覆盖率与错误率。本仓库没有默认的自动拒答阈值，也不伪造校准能力。保持零模型训练时，可首先通过任务定义、候选措辞、选项顺序诊断和业务规则改善可靠性；任何经验效果仍需标注数据支持。

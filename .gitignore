@@ -17,4 +17,5 @@ htmlcov/
 *.bin
 *.pt
 reports/
+runs/
 *.log

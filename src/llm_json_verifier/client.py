@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import math
 import os
+import random
 import time
 import uuid
 from pathlib import Path
 
 import httpx
 
-from .metrics import classification_metrics, percentile
-from .scheduler import gather_cancel_on_error
+from .datasets import parse_dataset
+from .metrics import classification_metrics
+from .runlog import RunLog, digest, json_digest, observe, outcome_summary, run_workers
 from .schemas import ClassifyRequest, ClassifyResponse
 
 
@@ -21,8 +22,15 @@ def read_request(path: str | Path) -> ClassifyRequest:
     return ClassifyRequest.model_validate_json(Path(path).read_text(encoding="utf-8"))
 
 
+class GatewayHTTPError(RuntimeError):
+    def __init__(self, status: int):
+        self.http_status = status
+        super().__init__(f"gateway HTTP {status}")
+
+
 class GatewayClient:
     def __init__(self, url: str, timeout: float = 1200):
+        self.url = url.rstrip("/")
         headers = {}
         if key := os.environ.get("LLMJV_API_KEY"):
             headers["Authorization"] = f"Bearer {key}"
@@ -39,7 +47,7 @@ class GatewayClient:
     async def classify(self, request: ClassifyRequest) -> ClassifyResponse:
         response = await self.http.post("/v1/classify", json=request.model_dump())
         if response.is_error:
-            raise RuntimeError(f"gateway HTTP {response.status_code}: {response.text[:1000]}")
+            raise GatewayHTTPError(response.status_code)
         result = ClassifyResponse.model_validate_json(response.content)
         if [answer.id for answer in result.answers] != [q.id for q in request.questions]:
             raise RuntimeError("gateway response does not cover the requested questions in order")
@@ -56,85 +64,178 @@ async def benchmark(
     concurrency: int,
     warmup: int,
     cache_mode: str,
+    records: str | Path | None = None,
 ) -> dict:
-    if repeats < 1 or concurrency < 1 or warmup < 0:
+    if repeats < 1 or not 1 <= concurrency <= 256 or warmup < 0:
         raise ValueError("invalid benchmark repeat/concurrency/warmup count")
     if cache_mode not in {"warm", "cold"}:
         raise ValueError("cache_mode must be warm or cold")
     namespace = "benchmark-" + uuid.uuid4().hex
     base = request.model_copy(update={"cache_namespace": namespace})
-    for _ in range(warmup):
-        await client.classify(base)
-    semaphore = asyncio.Semaphore(concurrency)
+    log = RunLog(
+        "benchmark",
+        {
+            "url": getattr(client, "url", None),
+            "request_sha256": json_digest(request.model_dump()),
+            "mode": cache_mode,
+            "repeats": repeats,
+            "concurrency": concurrency,
+            "warmup": warmup,
+        },
+        records,
+    )
+    try:
+        warmups = [await observe(client, base, log, phase="warmup", index=i) for i in range(warmup)]
 
-    async def once():
-        async with semaphore:
+        async def once(index, _):
             job = (
                 base
                 if cache_mode == "warm"
                 else base.model_copy(update={"cache_namespace": "cold-" + uuid.uuid4().hex})
             )
-            started = time.perf_counter()
-            result = await client.classify(job)
-            return (time.perf_counter() - started) * 1000, result
+            return await observe(client, job, log, phase="measured", index=index)
 
-    started = time.perf_counter()
-    runs = await gather_cancel_on_error([once() for _ in range(repeats)])
-    wall = time.perf_counter() - started
-    latencies = [elapsed for elapsed, _ in runs]
-    usages = [result.usage for _, result in runs]
-    cached = [usage.backend_cached_prompt_tokens for usage in usages]
-    return {
-        "mode": cache_mode,
-        "repeats": repeats,
-        "concurrency": concurrency,
-        "warmup": warmup,
-        "wall_seconds": wall,
-        "requests_per_second": repeats / wall,
-        "questions_per_second": repeats * len(request.questions) / wall,
-        "latency_ms": {
-            "p50": percentile(latencies, 0.5),
-            "p95": percentile(latencies, 0.95),
-            "p99": percentile(latencies, 0.99),
+        started = time.perf_counter()
+        runs = await run_workers(range(repeats), min(concurrency, repeats), once)
+        wall = time.perf_counter() - started
+        outcomes = outcome_summary([event for event, _ in runs])
+        usages = [result.usage for _, result in runs if result is not None]
+        cached = [usage.backend_cached_prompt_tokens for usage in usages]
+        return log.finish(
+            {
+                "mode": cache_mode,
+                "repeats": repeats,
+                "concurrency": concurrency,
+                "warmup": warmup,
+                "warmup_outcomes": outcome_summary([event for event, _ in warmups]),
+                "wall_seconds": wall,
+                **outcomes,
+                "requests_per_second": outcomes["succeeded"] / wall,
+                "questions_per_second": outcomes["succeeded"] * len(request.questions) / wall,
+                "backend_prompt_tokens": sum(u.backend_prompt_tokens for u in usages),
+                "backend_cached_prompt_tokens": sum(cached)
+                if cached and all(x is not None for x in cached)
+                else None,
+                "backend_completion_tokens": sum(u.backend_completion_tokens for u in usages),
+            }
+        )
+    finally:
+        log.close()
+
+
+async def evaluate(
+    client: GatewayClient,
+    path: str | Path,
+    rotate: bool = False,
+    records: str | Path | None = None,
+    concurrency: int = 1,
+    seed: int | None = None,
+) -> dict:
+    if not 1 <= concurrency <= 256:
+        raise ValueError("concurrency must be between 1 and 256")
+    dataset = await asyncio.to_thread(Path(path).read_bytes)
+    cases = parse_dataset(dataset)  # Validate the entire file before spending any inference.
+    if seed is not None:
+        random.Random(seed).shuffle(cases)
+    log = RunLog(
+        "evaluate",
+        {
+            "url": getattr(client, "url", None),
+            "dataset_sha256": digest(dataset),
+            "dataset": str(path),
+            "case_order": [case.id for case in cases],
+            "rotate": rotate,
+            "concurrency": concurrency,
+            "seed": seed,
         },
-        "backend_prompt_tokens": sum(u.backend_prompt_tokens for u in usages),
-        "backend_cached_prompt_tokens": sum(cached) if all(x is not None for x in cached) else None,
-        "backend_completion_tokens": sum(u.backend_completion_tokens for u in usages),
-        "note": "Latency excludes client concurrency-queue wait. Cold mode isolates engine cache by salt; CPU tokenization may be warm.",
-    }
+        records,
+    )
+    try:
 
+        async def once(index, case):
+            metadata = {
+                "index": index,
+                "case_id": case.id,
+                "tags": case.tags,
+                "expected": case.expected,
+            }
+            primary = await observe(client, case.request, log, phase="primary", **metadata)
+            rotation = None
+            if rotate and primary[1] is not None:
+                rotated = [
+                    q.model_copy(update={"options": q.options[1:] + q.options[:1]})
+                    for q in case.request.questions
+                ]
+                rotation = await observe(
+                    client,
+                    case.request.model_copy(update={"questions": rotated}),
+                    log,
+                    phase="rotation",
+                    **metadata,
+                )
+            return primary, rotation
 
-async def evaluate(client: GatewayClient, path: str | Path, rotate: bool = False) -> dict:
-    labeled = []
-    stable = comparisons = samples = 0
-    dataset = await asyncio.to_thread(Path(path).read_text, encoding="utf-8")
-    for line in dataset.splitlines():
-        if not line.strip():
-            continue
-        record = json.loads(line)
-        request = ClassifyRequest.model_validate(record["request"])
-        gold = record["expected"]
-        if not isinstance(gold, dict) or set(gold) != {q.id for q in request.questions}:
-            raise ValueError("expected must map every question ID to exactly one option ID")
-        for question in request.questions:
-            if gold[question.id] not in {option.id for option in question.options}:
-                raise ValueError(f"invalid ground truth for {question.id!r}")
-        result = await client.classify(request)
-        labeled.extend((answer, gold[answer.id]) for answer in result.answers)
-        samples += 1
-        if rotate:
-            rotated = [
-                q.model_copy(update={"options": q.options[1:] + q.options[:1]})
-                for q in request.questions
+        started = time.perf_counter()
+        runs = await run_workers(cases, min(concurrency, len(cases)), once)
+        wall = time.perf_counter() - started
+        labeled, mismatches, rotations = [], [], []
+        correct_samples = stable = comparisons = 0
+        for case, (primary, rotation) in zip(cases, runs, strict=True):
+            result = primary[1]
+            if result is None:
+                continue
+            labeled.extend((a, case.expected[a.id]) for a in result.answers)
+            errors = [
+                {
+                    "case_id": case.id,
+                    "question_id": a.id,
+                    "expected": case.expected[a.id],
+                    "selected": a.selected,
+                }
+                for a in result.answers
+                if a.selected != case.expected[a.id]
             ]
-            other = await client.classify(request.model_copy(update={"questions": rotated}))
-            by_id = {a.id: a.selected for a in other.answers}
-            comparisons += len(result.answers)
-            stable += sum(a.selected == by_id[a.id] for a in result.answers)
-    output = {"samples": samples, **classification_metrics(labeled)}
-    if rotate:
-        output["one_step_rotation_agreement"] = stable / comparisons
-    return output
+            mismatches.extend(errors)
+            correct_samples += not errors
+            if rotation is not None:
+                rotations.append(rotation[0])
+                if rotation[1] is not None:
+                    by_id = {a.id: a.selected for a in rotation[1].answers}
+                    comparisons += len(result.answers)
+                    stable += sum(a.selected == by_id[a.id] for a in result.answers)
+        requested = sum(len(case.request.questions) for case in cases)
+        metrics = (
+            classification_metrics(labeled)
+            if labeled
+            else {
+                "questions": 0,
+                "accuracy": None,
+                "nll": None,
+                "brier": None,
+                "ece": None,
+            }
+        )
+        output = {
+            "samples": len(cases),
+            "wall_seconds": wall,
+            **outcome_summary([primary[0] for primary, _ in runs]),
+            **metrics,
+            "requested_questions": requested,
+            "question_coverage": len(labeled) / requested,
+            "end_to_end_accuracy": sum(a.selected == gold for a, gold in labeled) / requested,
+            "exact_match_rate": correct_samples / len(cases),
+            "mismatches": mismatches,
+        }
+        if rotate:
+            output.update(
+                rotation_outcomes=outcome_summary(rotations),
+                rotation_compared_questions=comparisons,
+                rotation_question_coverage=comparisons / requested,
+                one_step_rotation_agreement=stable / comparisons if comparisons else None,
+            )
+        return log.finish(output)
+    finally:
+        log.close()
 
 
 async def verify_cache(client: GatewayClient, request: ClassifyRequest, tolerance: float) -> dict:
