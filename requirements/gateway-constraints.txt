@@ -1,0 +1,11 @@
+# Versions used for local CPU validation; only constrain packages already required.
+# This is not the vLLM engine environment. Dockerfile.vllm preserves its own stack.
+fastapi==0.141.1
+starlette==1.6.0
+httpx==0.28.1
+pydantic==2.13.5
+uvicorn==0.53.0
+transformers==5.17.0
+tokenizers==0.23.2
+huggingface-hub==1.31.0
+jinja2==3.1.6

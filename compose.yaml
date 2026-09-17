@@ -1,0 +1,47 @@
+services:
+  vllm:
+    build:
+      context: .
+      dockerfile: Dockerfile.vllm
+    gpus: all
+    ipc: host
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      LLMJV_VLLM_API_KEY: ${LLMJV_VLLM_API_KEY:-}
+    volumes:
+      - hf-cache:/data/huggingface
+      - ./configs/qwen3.8-27b.toml:/app/configs/qwen3.8-27b.toml:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,urllib.request; key=os.getenv('LLMJV_VLLM_API_KEY'); req=urllib.request.Request('http://127.0.0.1:8000/health',headers={'Authorization':'Bearer '+key} if key else {}); urllib.request.urlopen(req,timeout=10)"]
+      interval: 15s
+      timeout: 12s
+      retries: 10
+      start_period: 30m
+    restart: unless-stopped
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      LLMJV_BACKEND_URL: http://vllm:8000
+      LLMJV_HOST: 0.0.0.0
+      LLMJV_API_KEY: ${LLMJV_API_KEY:-}
+      LLMJV_VLLM_API_KEY: ${LLMJV_VLLM_API_KEY:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - hf-cache:/data/huggingface
+      - ./configs/qwen3.8-27b.toml:/app/configs/qwen3.8-27b.toml:ro
+    depends_on:
+      vllm:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=10)"]
+      interval: 20s
+      timeout: 12s
+      retries: 5
+      start_period: 5m
+    restart: unless-stopped
+volumes:
+  hf-cache:

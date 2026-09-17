@@ -1,0 +1,11 @@
+FROM vllm/vllm-openai:v0.29.0
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 HF_HOME=/data/huggingface LLMJV_ENGINE_HOST=0.0.0.0
+COPY pyproject.toml README.md ./
+COPY src ./src
+# Preserve the engine image's tightly coupled Torch/Transformers/CUDA dependencies.
+# The launcher itself only needs the image's existing pydantic package.
+RUN python -m pip install --no-deps .
+COPY configs ./configs
+ENTRYPOINT ["llmjv"]
+CMD ["engine-start", "--config", "configs/qwen3.8-27b.toml"]
