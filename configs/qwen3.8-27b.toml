@@ -9,6 +9,7 @@ max_model_len = 131072
 [backend]
 base_url = "http://127.0.0.1:8000"
 max_in_flight = 8
+max_queued_scores = 1024
 timeout_seconds = 300
 queue_timeout_seconds = 30
 # vLLM 0.29.0 limit. Larger menus are split, then normalized ONCE across all labels.
@@ -23,6 +24,7 @@ max_questions = 32
 max_request_bytes = 4194304
 max_total_prompt_tokens = 4194304
 max_active_requests = 16
+max_queued_requests = 32
 request_timeout_seconds = 900
 prefix_cache_entries = 8
 prefix_cache_tokens = 524288

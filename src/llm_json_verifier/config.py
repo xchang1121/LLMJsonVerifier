@@ -29,6 +29,7 @@ class ModelSettings(StrictConfig):
 class BackendSettings(StrictConfig):
     base_url: str = "http://127.0.0.1:8000"
     max_in_flight: int = Field(default=8, ge=1, le=256)
+    max_queued_scores: int = Field(default=1024, ge=0, le=65536)
     timeout_seconds: float = Field(default=300, gt=0)
     queue_timeout_seconds: float = Field(default=30, gt=0)
     logprob_chunk_size: int = Field(default=128, ge=1, le=128)
@@ -55,6 +56,7 @@ class ServiceSettings(StrictConfig):
     max_request_bytes: int = Field(default=4_194_304, ge=1024)
     max_total_prompt_tokens: int = Field(default=4_194_304, ge=512)
     max_active_requests: int = Field(default=16, ge=1, le=256)
+    max_queued_requests: int = Field(default=32, ge=0, le=4096)
     request_timeout_seconds: float = Field(default=900, gt=0)
     prefix_cache_entries: int = Field(default=8, ge=0, le=1024)
     prefix_cache_tokens: int = Field(default=524_288, ge=0)

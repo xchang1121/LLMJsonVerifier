@@ -74,3 +74,11 @@ Windows PowerShell 使用 `$env:LLMJV_BACKEND_URL='http://GPU主机:8000'`。网
 如果缓存一致性检查失败，首先在独立配置里同时设 `enable_prefix_caching=false` 与 `mamba_cache_mode="none"`，验证无缓存路径；之后排查引擎版本、kernel 和硬件差异。不要为了让测试通过无依据地放大容差。
 
 网关使用一个 worker，使并发限制和冷前缀协调覆盖整个实例。多个独立 worker/副本各有自己的限制与 hint；横向扩容时需要按总并发预算分配实例，或引入外部协调层。
+
+## 排队与取消
+
+`service.max_active_requests=16` 限制活动分类请求，`service.max_queued_requests=32` 限制等待请求。`backend.max_in_flight=8` 限制评分 HTTP 并发，`backend.max_queued_scores=1024` 限制评分等待数。两层队列均按 FIFO 分配；等待上限设为 `0` 表示只接受可立即开始的工作。队列已满或等待超过 `backend.queue_timeout_seconds` 时返回 503。
+
+`service.request_timeout_seconds` 覆盖准入排队和分类执行，超时返回 504。客户端断连或服务关闭会取消该请求的等待、评分 HTTP 调用及关联任务，并回收槽位；取消 HTTP 后由引擎处理推理终止。排队中的评分任务共享不可变 token 元组，获得槽位后才构造 HTTP 请求体。
+
+`timing.queue_ms` 为请求准入等待，`backend_queue_ms` 为全部评分调用的累计排队时间；后者可因并发而大于墙钟耗时。`scoring_ms` 包含后端排队、前缀协调、推理和结果组装，`total_ms` 包含请求准入等待。`/v1/info` 的 `admission` 显示当前活动数、等待数及上限。

@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import asyncio
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import httpx
 
+from .admission import AdmissionGate
 from .config import Settings
 from .errors import BackendBusy, BackendError, BackendProtocolError, BackendTimeout
 
@@ -20,12 +20,18 @@ class ScoreResult:
     prompt_tokens: int
     completion_tokens: int
     cached_prompt_tokens: int | None
+    queue_wait_ms: float = 0.0
 
 
 class VLLMBackend:
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None):
         self.settings = settings
-        self._semaphore = asyncio.Semaphore(settings.backend.max_in_flight)
+        self.admission = AdmissionGate(
+            settings.backend.max_in_flight,
+            settings.backend.max_queued_scores,
+            settings.backend.queue_timeout_seconds,
+            "scoring",
+        )
         self._owns_client = client is None
         headers = {}
         if key := os.environ.get("LLMJV_VLLM_API_KEY"):
@@ -93,40 +99,37 @@ class VLLMBackend:
     ) -> ScoreResult:
         if not 1 <= len(candidate_ids) <= 128 or len(set(candidate_ids)) != len(candidate_ids):
             raise ValueError("one vLLM scoring call requires 1..128 unique token IDs")
-        payload = {
-            "model": self.settings.model.served_name,
-            "prompt": list(prompt_ids),
-            "max_tokens": 1,
-            "n": 1,
-            "stream": False,
-            "echo": False,
-            "temperature": 1.0,
-            "top_p": 1.0,
-            "top_k": -1,
-            "min_p": 0.0,
-            "presence_penalty": 0.0,
-            "frequency_penalty": 0.0,
-            "repetition_penalty": 1.0,
-            "seed": 0,
-            "ignore_eos": True,
-            "skip_special_tokens": False,
-            "add_special_tokens": False,
-            "logprobs": len(candidate_ids),
-            "logprob_token_ids": list(candidate_ids),
-            "return_tokens_as_token_ids": True,
-            "cache_salt": cache_salt,
-        }
-        try:
-            await asyncio.wait_for(
-                self._semaphore.acquire(), timeout=self.settings.backend.queue_timeout_seconds
-            )
-        except TimeoutError as exc:
-            raise BackendBusy("scoring queue is full; retry with lower concurrency") from exc
-        try:
+        async with self.admission.slot() as waited_ms:
+            # Keep queued work as references to shared immutable token tuples;
+            # materialize the large HTTP payload only after admission.
+            payload = {
+                "model": self.settings.model.served_name,
+                "prompt": list(prompt_ids),
+                "max_tokens": 1,
+                "n": 1,
+                "stream": False,
+                "echo": False,
+                "temperature": 1.0,
+                "top_p": 1.0,
+                "top_k": -1,
+                "min_p": 0.0,
+                "presence_penalty": 0.0,
+                "frequency_penalty": 0.0,
+                "repetition_penalty": 1.0,
+                "seed": 0,
+                "ignore_eos": True,
+                "skip_special_tokens": False,
+                "add_special_tokens": False,
+                "logprobs": len(candidate_ids),
+                "logprob_token_ids": list(candidate_ids),
+                "return_tokens_as_token_ids": True,
+                "cache_salt": cache_salt,
+            }
             data = await self._request("POST", "/v1/completions", json=payload)
-        finally:
-            self._semaphore.release()
-        return parse_scores(data, candidate_ids, expected_prompt_tokens=len(prompt_ids))
+        return replace(
+            parse_scores(data, candidate_ids, expected_prompt_tokens=len(prompt_ids)),
+            queue_wait_ms=waited_ms,
+        )
 
 
 def parse_scores(

@@ -51,15 +51,38 @@ class BodyLimitMiddleware:
             if not message.get("more_body", False):
                 break
         delivered = False
+        disconnected = asyncio.Event()
 
         async def replay() -> dict:
             nonlocal delivered
             if not delivered:
                 delivered = True
                 return {"type": "http.request", "body": b"".join(chunks), "more_body": False}
-            return await receive()
+            await disconnected.wait()
+            return {"type": "http.disconnect"}
 
-        await self.app(scope, replay, send)
+        async def watch_disconnect():
+            # Only this coroutine reads the original channel after the body.
+            while (await receive())["type"] != "http.disconnect":
+                pass
+            disconnected.set()
+
+        application = asyncio.create_task(self.app(scope, replay, send))
+        watcher = asyncio.create_task(watch_disconnect())
+        try:
+            done, _ = await asyncio.wait(
+                (application, watcher), return_when=asyncio.FIRST_COMPLETED
+            )
+            if application in done:
+                await application
+            else:
+                await watcher
+                application.cancel()
+        finally:
+            for task in (application, watcher):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(application, watcher, return_exceptions=True)
 
 
 def create_app(
@@ -138,6 +161,12 @@ def create_app(
             **app.state.service.compiler.registry_summary(),
             "max_model_len": settings.model.max_model_len,
             "max_questions": settings.service.max_questions,
+            "admission": {
+                "active": app.state.service.admission.active,
+                "queued": app.state.service.admission.queued,
+                "max_active": settings.service.max_active_requests,
+                "max_queued": settings.service.max_queued_requests,
+            },
             "probability_kind": "candidate_conditional_uncalibrated",
         }
 

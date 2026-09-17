@@ -88,6 +88,8 @@ class Timing(StrictModel):
     preparation_ms: float
     scoring_ms: float
     total_ms: float
+    queue_ms: float = Field(default=0.0, ge=0)
+    backend_queue_ms: float = Field(default=0.0, ge=0)
 
 
 class ClassifyResponse(StrictModel):

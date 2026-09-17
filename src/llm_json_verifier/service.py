@@ -8,6 +8,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
+from .admission import AdmissionGate
 from .backend import ScoreResult, VLLMBackend
 from .config import Settings
 from .errors import BackendBusy, BackendProtocolError, BackendTimeout
@@ -32,9 +33,21 @@ class ClassificationService:
         self.primer = PrefixPrimer(
             settings.service.warm_hint_ttl_seconds, settings.service.warm_hint_entries
         )
-        self._active = asyncio.Semaphore(settings.service.max_active_requests)
+        self.admission = AdmissionGate(
+            settings.service.max_active_requests,
+            settings.service.max_queued_requests,
+            settings.backend.queue_timeout_seconds,
+            "classification",
+        )
+        self._tasks: set[asyncio.Task] = set()
+        self._closing = False
 
     async def close(self) -> None:
+        self._closing = True
+        tasks = [task for task in self._tasks if task is not asyncio.current_task()]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         await self.backend.close()
 
     async def verify_backend(self) -> dict:
@@ -60,19 +73,22 @@ class ClassificationService:
         }
 
     async def classify(self, request: ClassifyRequest) -> ClassifyResponse:
-        try:
-            await asyncio.wait_for(
-                self._active.acquire(), timeout=self.settings.backend.queue_timeout_seconds
-            )
-        except TimeoutError as exc:
-            raise BackendBusy("classification request queue is full") from exc
+        if self._closing:
+            raise BackendBusy("classification service is shutting down")
+        started = time.perf_counter()
+        task = asyncio.current_task()
+        self._tasks.add(task)
         try:
             async with asyncio.timeout(self.settings.service.request_timeout_seconds):
-                return await self._classify(request)
+                async with self.admission.slot() as waited_ms:
+                    result = await self._classify(request)
+                    result.timing.queue_ms = waited_ms
+                    result.timing.total_ms = (time.perf_counter() - started) * 1000
+                    return result
         except TimeoutError as exc:
             raise BackendTimeout("classification exceeded its total deadline") from exc
         finally:
-            self._active.release()
+            self._tasks.discard(task)
 
     async def _classify(self, request: ClassifyRequest) -> ClassifyResponse:
         started = time.perf_counter()
@@ -147,5 +163,6 @@ class ClassificationService:
                 preparation_ms=(prepared_at - started) * 1000,
                 scoring_ms=(done - prepared_at) * 1000,
                 total_ms=(done - started) * 1000,
+                backend_queue_ms=sum(result.queue_wait_ms for result in results),
             ),
         )

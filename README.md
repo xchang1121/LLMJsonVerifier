@@ -86,7 +86,8 @@ llmjv classify --input examples/classify.json --url http://127.0.0.1:8080
 | 共享前缀 | 文档在前、问题在后，以特殊 token 划分编码边界；GPU 缓存由 vLLM 管理 |
 | 混合架构缓存 | 使用 `mamba-cache-mode=align` 处理 Qwen 的全注意力与 Gated DeltaNet 状态 |
 | 冷前缀协调 | 同文档的冷长文请求共享首项评分的等待屏障，减少重复 prefill |
-| 调度 | 连续批处理、chunked prefill、async scheduling、HTTP 连接池、有界并发和超时 |
+| 调度 | 连续批处理、chunked prefill、async scheduling、HTTP 连接池、有界并发、FIFO 排队和总超时 |
+| 取消 | 客户端断连与服务关闭时，取消排队和评分 HTTP 请求并释放槽位 |
 | CPU 缓存 | 有界 LRU 缓存文档 token IDs，减少重复分词 |
 | KV 精度 | 默认 `auto`，可配置 FP8 KV |
 
