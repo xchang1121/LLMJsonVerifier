@@ -1,61 +1,40 @@
 # LLMJsonVerifier
 
-把 **Qwen3.8-27B + vLLM** 用作零额外训练的长上下文分类服务。每个请求传入一份文档、多道问题和各自的完整候选项，返回候选 ID、全部候选概率和缓存统计。
+基于 **Qwen3.8-27B + vLLM** 的零额外训练长上下文分类 API。输入一份文档、多道问题及各自的候选项，返回结构化 JSON，包含分类结果、全部候选概率和缓存统计。
 
-**实现状态：提供服务、部署配置、CPU 测试及远程评测工具；未在 GPU 上运行 27B 模型，吞吐量、显存峰值和分类准确率尚未实测。** 本仓库保证的是接口与评分处理的结构约束；不声称判断一定符合 ground truth。
-
-## 工作原理
-
-1. 调用方提供问题和候选项定义；服务为选项分配经过当前 tokenizer 验证的单 token 代号，例如 `A`、`B`、`C`。候选项不由模型生成。
-2. 固定系统指令、长文档、当前问题与**全部选项**进入 Qwen 原生 chat template；关闭 thinking，在 assistant 的 `{"answer": "` 后评分。
-3. vLLM 对这一个位置计算词表分布。通过 `logprob_token_ids` 取出所有候选代号的原始 log probability，再做候选集合内的 softmax。
-4. Python 根据分数构造并校验响应 JSON。模型生成的文字不参与输出解析。vLLM 每次评分仍执行 **1 个输出 token**，并非“零 token 推理”。
-
-单个问题的所有选项共享同一个隐藏状态和词表投影，不需要每个选项各跑一遍长文。不同问题是不同的推理请求，由 vLLM 连续批处理；它们共享能命中的文档前缀缓存。超过 128 个选项时，因 vLLM 接口限制需要多次评分调用。
-
-对于候选代号对应分数 `l_i = log P(token_i | prompt)`：
-
-```text
-p_i = exp((l_i - max(l)) / T) / sum_j exp((l_j - max(l)) / T)
-```
-
-概率和为 1 是归一化的结果。它表达“在提供的选项里如何分配概率”，不是“这个结论为真的概率”。默认 `T=1`；改变温度不会自动带来校准。
+支持动态问题与候选项、单位置评分、共享前缀缓存、批量调度，以及准确率评测和性能压测。
 
 ## 快速开始
 
-需要 Python 3.11+。网关和 CPU 测试可在 Windows 上运行；vLLM 引擎在有兼容 GPU 的 Linux 主机运行。版本固定为 **vLLM 0.29.0**，模型与 tokenizer 固定到 `configs/qwen3.8-27b.toml` 中的同一提交。
+网关使用 Python 3.11+，支持 Windows 和 Linux；vLLM 引擎运行于配有兼容 GPU 的 Linux 主机。引擎版本为 **vLLM 0.29.0**，模型与 tokenizer 版本由 [配置文件](configs/qwen3.8-27b.toml)统一固定。
 
 ```bash
 python -m venv .venv
 # Linux: source .venv/bin/activate
 # Windows PowerShell: .venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
-python -m pytest
-llmjv engine-command --config configs/qwen3.8-27b.toml
 ```
 
-不加载模型权重，只检查真实 tokenizer 与候选代号：
-
-```bash
-llmjv doctor --config configs/qwen3.8-27b.toml
-```
-
-有 GPU 的服务器可使用 Compose（会下载模型权重；**不要在当前无法承载模型的机器运行**）：
+在 GPU 服务器上启动引擎和网关：
 
 ```bash
 docker compose up --build -d
 docker compose logs -f gateway
 ```
 
-默认绑定主机 `127.0.0.1:8080`，引擎留在容器内网。详细配置、裸机部署和显存估算见 [deployment.md](docs/deployment.md)。
+首次启动下载模型权重并保存在 Hugging Face 缓存卷中。网关默认监听 `127.0.0.1:8080`，启动时校验模型名、tokenizer 一致性和候选分数完整性。
+
+调用示例：
 
 ```bash
 llmjv classify --input examples/classify.json --url http://127.0.0.1:8080
 ```
 
-网关启动时检查服务模型名、网关与引擎 tokenizer 一致性、指定候选分数是否完整。探针只检查接口能力，不验证语义准确率。不要为兼容旧引擎关闭检查并悄悄退回 top-k。
+也可打开 `http://127.0.0.1:8080/docs`，在 `POST /v1/classify` 中点击 **Try it out** 提交请求。远程访问、鉴权、裸机部署和显存配置见 [部署指南](docs/deployment.md)。
 
 ## 输入与输出
+
+将证据放入 `context`，把问题及其候选项放入 `questions`。候选项的 `id` 用于读取结果，`description` 定义分类含义。
 
 `POST /v1/classify`：
 
@@ -74,31 +53,44 @@ llmjv classify --input examples/classify.json --url http://127.0.0.1:8080
 }
 ```
 
-返回 `answers[].selected`、以输入 ID 为键的 `probabilities`、`confidence`、第一和第二名的 `margin`、自然对数单位的 `entropy`，以及 `usage`、`timing`。`probability_kind` 固定为 `candidate_conditional_uncalibrated`。不会对缺失候选补零；超时或协议不完整会返回错误。
+同一文档的多个问题放在同一个 `questions` 数组中，每题可使用不同的候选项。
 
-- `temperature`：默认 1，仅作用于最终候选归一化。
-- `execution`：`auto` 默认对冷长文先执行第一道真实评分，再并发其余评分；`parallel` 立即并发；`serial` 串行，适合对照。
-- `cache_namespace`：引擎缓存盐的分组标识，默认 `default`。它不是鉴权凭证。不同命名空间隔离引擎缓存复用，CPU tokenization 缓存仍共享。
-- 默认最多 32 道问题、每题 256 个选项、完整提示词加 1 token 不超过 131072。长度包含系统指令、文档、问题、选项和模板开销；超长直接报错，不截断。
-- 任一评分失败则整个请求失败。额外字段、重复 ID、完全相同的选项描述被拒绝。
-
-OpenAPI 在 `/docs`，`/healthz` 是网关存活检查，`/readyz` 检查初始化和引擎可达性，`/v1/info` 显示模型与代号注册表摘要。
-
-## 已采用的优化
-
-| 优化 | 实现与边界 |
+| 返回字段 | 含义 |
 | --- | --- |
-| 单位置候选评分 | 不自回归生成整段 JSON；一个问题通常只需一个评分调用 |
-| 显式指定 token | 不靠自然 top-k 猜测概率；完整取分失败就报错 |
-| 文档在前、问题在后 | 共享前缀以特殊 token 结尾，分别编码后拼接与整体编码一致 |
-| vLLM 前缀缓存 | 由引擎管理物理缓存与引用；应用不复制 KV tensor |
-| 混合架构缓存 | Qwen3.8 是全注意力和 Gated DeltaNet 混合架构，采用 `mamba-cache-mode=align`；能共享哪些状态由引擎决定 |
-| 冷前缀协调 | 相同文档的冷请求先完成一项真实评分，减少同时重复 prefill；缓存命中仍以引擎统计为准 |
-| 调度 | 连续批处理、chunked prefill、async scheduling、HTTP 连接池、有界并发和超时 |
-| CPU 缓存 | 有界 LRU 缓存文档 token IDs，减少重复分词，不保存模型 KV |
-| 可选 FP8 KV | 默认关闭；仅在目标 GPU 上验证精度、兼容性和收益后开启 |
+| `answers[].selected` | 所选候选项的 ID |
+| `answers[].probabilities` | 以候选 ID 为键的条件概率分布，总和为 1 |
+| `answers[].confidence` | 所选候选项的概率 |
+| `answers[].margin` / `entropy` | 前两名的概率差 / 分布熵（自然对数） |
+| `usage` / `timing` | token 用量、评分次数、缓存命中和耗时 |
 
-不默认启用 MTP/推测解码：本服务每次只取一个位置的分数。大量选项仍进入提示词，不会凭空获得免费的计算。分支特有状态、部分块与混合状态的复制/分配仍可能发生，不能声称“整个系统零复制”。
+概率类型为 `candidate_conditional_uncalibrated`。超时、缺失分数或协议异常返回错误。
+
+## 工作原理
+
+1. 为每个候选项分配经 tokenizer 验证的唯一单 token 代号，例如 `A`、`B`、`C`。
+2. 将系统指令、文档、问题和全部候选定义写入 Qwen 原生 chat template，使用非 thinking 模式，在 `{"answer": "` 后评分。
+3. 通过 vLLM 的 `logprob_token_ids` 取得所有候选代号的原始 log probability，在候选集合内统一 softmax，再由程序构造并校验 JSON。
+
+单题的候选分数来自同一个位置的词表分布，每次后端调用执行 1 个输出 token。每次最多取 128 个候选分数；更多候选使用相同完整提示词分批取分，合并后归一化。不同问题独立评分，由 vLLM 批量调度并复用可命中的文档前缀。
+
+## 配置与优化
+
+默认每次请求最多 32 道问题，每题 2–256 个选项。每题完整提示词加评分 token 的上限为 131072，包含系统指令、文档、问题、选项和模板开销；超长请求返回错误。问题 ID 在请求内唯一，同题的选项 ID 和描述各自唯一。
+
+- `temperature`：候选归一化温度，默认 1。
+- `execution`：`auto` 先完成冷长文的第一项评分再并发处理其余项；`parallel` 立即并发；`serial` 串行。
+- `cache_namespace`：引擎前缀缓存的分组标识，默认 `default`。
+
+| 优化 | 实现 |
+| --- | --- |
+| 共享前缀 | 文档在前、问题在后，以特殊 token 划分编码边界；GPU 缓存由 vLLM 管理 |
+| 混合架构缓存 | 使用 `mamba-cache-mode=align` 处理 Qwen 的全注意力与 Gated DeltaNet 状态 |
+| 冷前缀协调 | 同文档的冷长文请求共享首项评分的等待屏障，减少重复 prefill |
+| 调度 | 连续批处理、chunked prefill、async scheduling、HTTP 连接池、有界并发和超时 |
+| CPU 缓存 | 有界 LRU 缓存文档 token IDs，减少重复分词 |
+| KV 精度 | 默认 `auto`，可配置 FP8 KV |
+
+`/healthz` 提供存活检查，`/readyz` 检查初始化和引擎可达性，`/v1/info` 显示模型与代号注册表摘要。
 
 ## 验证与评测
 
@@ -106,7 +98,9 @@ OpenAPI 在 `/docs`，`/healthz` 是网关存活检查，`/readyz` 检查初始�
 python -m ruff check .
 python -m pytest
 python -m build
-# 以下命令需要已经运行的 GPU 引擎/网关：
+llmjv doctor --config configs/qwen3.8-27b.toml
+
+# 对运行中的服务进行检查、评测与压测
 llmjv doctor --config configs/qwen3.8-27b.toml --backend
 llmjv verify-cache --input examples/classify.json
 llmjv evaluate --dataset examples/eval.jsonl --rotate
@@ -114,6 +108,6 @@ llmjv benchmark --input examples/classify.json --cache-mode cold --repeats 20
 llmjv benchmark --input examples/classify.json --cache-mode warm --repeats 20 --concurrency 4
 ```
 
-`verify-cache` 比较独立冷请求、共享前缀和再次命中的结果，并要求实际观察到缓存命中；短提示词可能没有可复用块，应使用自己的长文样本。`evaluate` 报告 accuracy、NLL、Brier、ECE 和可选的一次候选轮转一致率。样例数据只用于展示数据格式，不能当作业务准确率证据。见 [validation.md](docs/validation.md)。
+`verify-cache` 用长文样本比较冷、热缓存的概率结果并检查实际命中；`evaluate` 报告 accuracy、NLL、Brier、ECE 和候选轮转一致率；`benchmark` 报告吞吐量、延迟分位数及缓存统计。
 
-实现原理、概率推导和使用边界见 [architecture.md](docs/architecture.md)。
+详细说明：[工作原理](docs/architecture.md) · [部署指南](docs/deployment.md) · [验证与数据格式](docs/validation.md) · [测试记录](docs/validation-report.json)。
