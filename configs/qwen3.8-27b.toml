@@ -1,0 +1,44 @@
+# Pinned on 2026-09-17. This is a deployment starting point, not a GPU benchmark.
+[model]
+id = "Qwen/Qwen3.8-27B"
+revision = "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"
+served_name = "llm-json-verifier"
+# 128 Ki tokens including the one backend scoring token. Native maximum: 262144.
+max_model_len = 131072
+
+[backend]
+base_url = "http://127.0.0.1:8000"
+max_in_flight = 8
+timeout_seconds = 300
+queue_timeout_seconds = 30
+# vLLM 0.29.0 limit. Larger menus are split, then normalized ONCE across all labels.
+logprob_chunk_size = 128
+verify_on_startup = true
+
+[service]
+host = "127.0.0.1"
+port = 8080
+max_options = 256
+max_questions = 32
+max_request_bytes = 4194304
+max_total_prompt_tokens = 4194304
+max_active_requests = 16
+request_timeout_seconds = 900
+prefix_cache_entries = 8
+prefix_cache_tokens = 524288
+prime_min_prefix_tokens = 4096
+warm_hint_ttl_seconds = 120
+warm_hint_entries = 128
+
+[engine]
+tensor_parallel_size = 1
+gpu_memory_utilization = 0.90
+max_num_batched_tokens = 8192
+max_num_seqs = 16
+dtype = "auto"
+kv_cache_dtype = "auto"
+mamba_cache_mode = "align"
+enable_prefix_caching = true
+enable_chunked_prefill = true
+async_scheduling = true
+language_model_only = true
