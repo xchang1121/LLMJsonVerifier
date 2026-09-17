@@ -1,0 +1,2 @@
+{"request":{"context":"订单已于 6 月 3 日送达。","questions":[{"id":"status","question":"订单是否已送达？","options":[{"id":"yes","description":"已送达"},{"id":"no","description":"未送达"},{"id":"unknown","description":"信息不足"}]}]},"expected":{"status":"yes"}}
+{"request":{"context":"这份说明只列出了订单编号，没有物流或签收信息。","questions":[{"id":"status","question":"订单是否已送达？","options":[{"id":"yes","description":"已送达"},{"id":"no","description":"未送达"},{"id":"unknown","description":"信息不足"}]}]},"expected":{"status":"unknown"}}

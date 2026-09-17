@@ -1,0 +1,26 @@
+{
+  "context": "订单编号 2026-061 于 6 月 1 日下单，承诺 6 月 5 日之前到货。物流记录显示 6 月 3 日已送达。客户确认商品完好，无退货申请。",
+  "questions": [
+    {
+      "id": "delivery_status",
+      "question": "订单现在的物流状态是什么？",
+      "options": [
+        {"id": "delivered", "description": "已经送达"},
+        {"id": "in_transit", "description": "仍在运输途中"},
+        {"id": "unknown", "description": "信息不足，无法判断"}
+      ]
+    },
+    {
+      "id": "late",
+      "question": "订单是否晚于承诺时间送达？",
+      "options": [
+        {"id": "yes", "description": "是，已晚于承诺日期"},
+        {"id": "no", "description": "否，在承诺日期之前或当天送达"},
+        {"id": "unknown", "description": "缺少承诺日期或实际送达日期，无法判断"}
+      ]
+    }
+  ],
+  "temperature": 1.0,
+  "execution": "auto",
+  "cache_namespace": "demo"
+}
