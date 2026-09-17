@@ -15,7 +15,17 @@ from .errors import BackendBusy, BackendProtocolError, BackendTimeout
 from .probabilities import make_answer
 from .prompts import PreparedQuestion, PromptCompiler
 from .scheduler import PrefixPrimer, gather_cancel_on_error
-from .schemas import ClassifyRequest, ClassifyResponse, Option, Question, Timing, Usage
+from .schema_compiler import compile_schema
+from .schemas import (
+    ClassifyRequest,
+    ClassifyResponse,
+    Option,
+    Question,
+    SchemaClassifyRequest,
+    SchemaClassifyResponse,
+    Timing,
+    Usage,
+)
 
 
 @dataclass(frozen=True)
@@ -73,6 +83,12 @@ class ClassificationService:
         }
 
     async def classify(self, request: ClassifyRequest) -> ClassifyResponse:
+        return await self._run(lambda: self._classify(request))
+
+    async def classify_schema(self, request: SchemaClassifyRequest) -> SchemaClassifyResponse:
+        return await self._run(lambda: self._classify_schema(request))
+
+    async def _run(self, operation):
         if self._closing:
             raise BackendBusy("classification service is shutting down")
         started = time.perf_counter()
@@ -81,7 +97,7 @@ class ClassificationService:
         try:
             async with asyncio.timeout(self.settings.service.request_timeout_seconds):
                 async with self.admission.slot() as waited_ms:
-                    result = await self._classify(request)
+                    result = await operation()
                     result.timing.queue_ms = waited_ms
                     result.timing.total_ms = (time.perf_counter() - started) * 1000
                     return result
@@ -89,6 +105,46 @@ class ClassificationService:
             raise BackendTimeout("classification exceeded its total deadline") from exc
         finally:
             self._tasks.discard(task)
+
+    async def _classify_schema(self, request: SchemaClassifyRequest) -> SchemaClassifyResponse:
+        started = time.perf_counter()
+        plan = compile_schema(request, self.settings.service)
+        compiled_at = time.perf_counter()
+        if plan.fields:
+            scored = await self._classify(plan.request(request))
+        else:
+            scored = ClassifyResponse(
+                request_id=str(uuid.uuid4()),
+                model=self.settings.model.id,
+                model_revision=self.settings.model.revision,
+                answers=[],
+                usage=Usage(
+                    logical_prompt_tokens=0,
+                    backend_prompt_tokens=0,
+                    backend_completion_tokens=0,
+                    backend_cached_prompt_tokens=0,
+                    scoring_calls=0,
+                    prefix_tokens=0,
+                    prefix_tokenization_cache_hit=False,
+                    primed=False,
+                ),
+                timing=Timing(preparation_ms=0.0, scoring_ms=0.0, total_ms=0.0),
+            )
+        scored_at = time.perf_counter()
+        result, fields = plan.assemble(scored.answers)
+        response = SchemaClassifyResponse(
+            request_id=scored.request_id,
+            model=scored.model,
+            model_revision=scored.model_revision,
+            result=result,
+            fields=fields,
+            usage=scored.usage,
+            timing=scored.timing,
+        )
+        done = time.perf_counter()
+        response.timing.preparation_ms += (compiled_at - started + done - scored_at) * 1000
+        response.timing.total_ms = (done - started) * 1000
+        return response
 
     async def _classify(self, request: ClassifyRequest) -> ClassifyResponse:
         started = time.perf_counter()

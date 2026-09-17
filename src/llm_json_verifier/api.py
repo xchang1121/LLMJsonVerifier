@@ -17,8 +17,14 @@ from . import __version__
 from .backend import VLLMBackend
 from .config import Settings, load_settings
 from .errors import VerifierError
+from .jsonio import strict_json_loads
 from .prompts import load_compiler
-from .schemas import ClassifyRequest, ClassifyResponse
+from .schemas import (
+    ClassifyRequest,
+    ClassifyResponse,
+    SchemaClassifyRequest,
+    SchemaClassifyResponse,
+)
 from .service import ClassificationService
 
 logger = logging.getLogger(__name__)
@@ -52,12 +58,26 @@ class BodyLimitMiddleware:
                 break
         delivered = False
         disconnected = asyncio.Event()
+        body = b"".join(chunks)
+        try:
+            strict_json_loads(body)
+        except (ValueError, RecursionError):
+            await JSONResponse(
+                status_code=422,
+                content={
+                    "error": {
+                        "code": "invalid_json",
+                        "message": "body must be finite JSON with unique object keys",
+                    }
+                },
+            )(scope, receive, send)
+            return
 
         async def replay() -> dict:
             nonlocal delivered
             if not delivered:
                 delivered = True
-                return {"type": "http.request", "body": b"".join(chunks), "more_body": False}
+                return {"type": "http.request", "body": body, "more_body": False}
             await disconnected.wait()
             return {"type": "http.disconnect"}
 
@@ -179,6 +199,22 @@ def create_app(
             len(result.answers),
             result.usage.scoring_calls,
             result.usage.backend_cached_prompt_tokens,
+            result.timing.total_ms,
+        )
+        return result
+
+    @app.post(
+        "/v1/classify-schema",
+        response_model=SchemaClassifyResponse,
+        dependencies=[Depends(authorize)],
+    )
+    async def classify_schema(body: SchemaClassifyRequest):
+        result = await app.state.service.classify_schema(body)
+        logger.info(
+            "request=%s fields=%d calls=%d elapsed_ms=%.1f",
+            result.request_id,
+            len(result.fields),
+            result.usage.scoring_calls,
             result.timing.total_ms,
         )
         return result

@@ -14,6 +14,10 @@ class CapacityError(VerifierError):
     code = "capacity_exceeded"
 
 
+class SchemaError(VerifierError):
+    code = "invalid_schema"
+
+
 class BackendError(VerifierError):
     status_code = 502
     code = "backend_error"

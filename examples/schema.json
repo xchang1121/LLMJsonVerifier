@@ -1,0 +1,23 @@
+{
+  "context": "订单于6月3日送达。客户已确认收货，并表示包裹完好。",
+  "instruction": "根据文档证据判断各字段；物流状态的证据缺失或互相矛盾时选择 unknown。",
+  "schema": {
+    "type": "object",
+    "description": "订单收货状态。",
+    "properties": {
+      "delivery": {
+        "type": "string",
+        "enum": ["delivered", "in_transit", "unknown"],
+        "description": "delivered 表示已送达，in_transit 表示仍在运输，unknown 表示信息不足。"
+      },
+      "customer_confirmed": {
+        "type": "boolean",
+        "description": "文档明确写明客户确认收货时为 true，否则为 false。"
+      },
+      "schema_version": {"const": 1}
+    },
+    "required": ["delivery", "customer_confirmed", "schema_version"],
+    "additionalProperties": false
+  },
+  "execution": "auto"
+}

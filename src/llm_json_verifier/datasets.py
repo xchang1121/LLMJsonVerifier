@@ -7,6 +7,7 @@ from pathlib import Path
 
 from pydantic import Field, model_validator
 
+from .jsonio import strict_json_loads
 from .schemas import ClassifyRequest, StrictModel
 
 
@@ -33,7 +34,7 @@ def parse_dataset(data: bytes) -> list[EvaluationCase]:
         if not line.strip():
             continue
         try:
-            case = EvaluationCase.model_validate_json(line)
+            case = EvaluationCase.model_validate(strict_json_loads(line))
         except ValueError as exc:
             raise ValueError(f"invalid dataset record on line {number}") from exc
         case.id = case.id or f"line-{number}"

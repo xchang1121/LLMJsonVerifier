@@ -2,7 +2,7 @@
 
 基于 **Qwen3.8-27B + vLLM** 的零额外训练长上下文分类 API。输入一份文档、多道问题及各自的候选项，返回结构化 JSON，包含分类结果、全部候选概率和缓存统计。
 
-支持动态问题与候选项、单位置评分、共享前缀缓存、批量调度，以及准确率评测和性能压测。
+支持动态问题与候选项、JSON Schema 分类、单位置评分、共享前缀缓存、批量调度，以及准确率评测和性能压测。
 
 ## 快速开始
 
@@ -65,6 +65,16 @@ llmjv classify --input examples/classify.json --url http://127.0.0.1:8080
 
 概率类型为 `candidate_conditional_uncalibrated`。超时、缺失分数或协议异常返回错误。
 
+## 按 Schema 分类
+
+`POST /v1/classify-schema` 将 Schema 的枚举、布尔值和有界整数编译为分类问题，返回保持原始类型的 `result` 与字段概率。支持嵌套对象、固定长度数组和直接填入的常量。
+
+```bash
+llmjv classify-schema --input examples/schema.json --url http://127.0.0.1:8080
+```
+
+请求使用 `context`、`instruction` 和 `schema`；字段的 `description` 定义判断含义。完整示例见 [schema.json](examples/schema.json)，支持的结构和返回格式见 [Schema 接口](docs/schema.md)。
+
 ## 工作原理
 
 1. 为每个候选项分配经 tokenizer 验证的唯一单 token 代号，例如 `A`、`B`、`C`。
@@ -115,4 +125,4 @@ llmjv benchmark --input examples/classify.json --cache-mode warm --repeats 20 --
 
 回归样本覆盖事实缺失、改写、否定、矛盾和注入文本。`make-dataset` 按字符长度生成长文，并把证据放在指定位置。
 
-详细说明：[工作原理](docs/architecture.md) · [部署指南](docs/deployment.md) · [验证与数据格式](docs/validation.md) · [测试记录](docs/validation-report.json)。
+详细说明：[工作原理](docs/architecture.md) · [Schema 接口](docs/schema.md) · [部署指南](docs/deployment.md) · [验证与数据格式](docs/validation.md) · [测试记录](docs/validation-report.json)。

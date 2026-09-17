@@ -12,14 +12,26 @@ from pathlib import Path
 
 import httpx
 
+from .config import ServiceSettings
 from .datasets import parse_dataset
+from .jsonio import strict_json_loads
 from .metrics import classification_metrics
 from .runlog import RunLog, digest, json_digest, observe, outcome_summary, run_workers
-from .schemas import ClassifyRequest, ClassifyResponse
+from .schema_compiler import compile_schema
+from .schemas import (
+    ClassifyRequest,
+    ClassifyResponse,
+    SchemaClassifyRequest,
+    SchemaClassifyResponse,
+)
 
 
 def read_request(path: str | Path) -> ClassifyRequest:
-    return ClassifyRequest.model_validate_json(Path(path).read_text(encoding="utf-8"))
+    return ClassifyRequest.model_validate(strict_json_loads(Path(path).read_bytes()))
+
+
+def read_schema_request(path: str | Path) -> SchemaClassifyRequest:
+    return SchemaClassifyRequest.model_validate(strict_json_loads(Path(path).read_bytes()))
 
 
 class GatewayHTTPError(RuntimeError):
@@ -48,12 +60,34 @@ class GatewayClient:
         response = await self.http.post("/v1/classify", json=request.model_dump())
         if response.is_error:
             raise GatewayHTTPError(response.status_code)
-        result = ClassifyResponse.model_validate_json(response.content)
+        result = ClassifyResponse.model_validate(strict_json_loads(response.content))
         if [answer.id for answer in result.answers] != [q.id for q in request.questions]:
             raise RuntimeError("gateway response does not cover the requested questions in order")
         for question, answer in zip(request.questions, result.answers, strict=True):
             if set(answer.probabilities) != {option.id for option in question.options}:
                 raise RuntimeError("gateway response does not cover exactly the requested options")
+        return result
+
+    async def classify_schema(self, request: SchemaClassifyRequest) -> SchemaClassifyResponse:
+        # Use the largest configurable server limits for client-side verification;
+        # the server enforces its own smaller admission and schema budgets.
+        plan = compile_schema(
+            request,
+            ServiceSettings(
+                max_options=702,
+                max_questions=128,
+                max_schema_bytes=1_048_576,
+                max_schema_depth=32,
+                max_schema_nodes=8192,
+            ),
+        )
+        response = await self.http.post(
+            "/v1/classify-schema", json=request.model_dump(by_alias=True)
+        )
+        if response.is_error:
+            raise GatewayHTTPError(response.status_code)
+        result = SchemaClassifyResponse.model_validate(strict_json_loads(response.content))
+        plan.verify_response(result)
         return result
 
 

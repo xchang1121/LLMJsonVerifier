@@ -30,7 +30,7 @@ def parser() -> argparse.ArgumentParser:
             )
         if name == "engine-command":
             command.add_argument("--json", action="store_true")
-    for name in ("classify", "benchmark", "evaluate", "verify-cache"):
+    for name in ("classify", "classify-schema", "benchmark", "evaluate", "verify-cache"):
         command = commands.add_parser(name)
         command.add_argument("--url", default="http://127.0.0.1:8080")
         if name == "evaluate":
@@ -61,13 +61,22 @@ def parser() -> argparse.ArgumentParser:
 
 
 async def remote(args) -> int:
-    from .client import GatewayClient, benchmark, evaluate, read_request, verify_cache
+    from .client import (
+        GatewayClient,
+        benchmark,
+        evaluate,
+        read_request,
+        read_schema_request,
+        verify_cache,
+    )
 
     async with GatewayClient(args.url) as client:
         if args.command == "evaluate":
             result = await evaluate(
                 client, args.dataset, args.rotate, args.records, args.concurrency, args.seed
             )
+        elif args.command == "classify-schema":
+            result = (await client.classify_schema(read_schema_request(args.input))).model_dump()
         else:
             request = read_request(args.input)
             if args.command == "classify":
@@ -129,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             return 0
-        if args.command in {"classify", "benchmark", "evaluate", "verify-cache"}:
+        if args.command in {"classify", "classify-schema", "benchmark", "evaluate", "verify-cache"}:
             return asyncio.run(remote(args))
         settings = load_settings(args.config)
         if args.command == "serve":

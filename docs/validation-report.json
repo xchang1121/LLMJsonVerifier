@@ -1,10 +1,10 @@
 {
-  "executed_at_utc": "2026-09-17T07:41:46.428038+00:00",
+  "executed_at_utc": "2026-09-17T09:15:37.254782+00:00",
   "platform": "Windows",
   "python": "3.12.14",
   "checks": {
     "pytest_with_real_tokenizer": {
-      "tests": 58,
+      "tests": 119,
       "failures": 0,
       "errors": 0,
       "skipped": 0
@@ -13,7 +13,12 @@
     "ruff_format_check": "passed",
     "python_build_sdist_and_wheel": "passed",
     "pip_check": "passed",
-    "archive_private_files_and_weights_check": "passed"
+    "archive_private_files_and_weights_check": "passed",
+    "schema_independent_validation": {
+      "validator": "jsonschema.Draft202012Validator",
+      "nested_choice_combinations": 48,
+      "result": "passed"
+    }
   },
   "tokenizer": {
     "model": "Qwen/Qwen3.8-27B",
@@ -75,7 +80,8 @@
     "huggingface-hub": "1.31.0",
     "jinja2": "3.1.6",
     "pytest": "9.1.1",
-    "ruff": "0.16.8"
+    "ruff": "0.16.8",
+    "jsonschema": "4.26.0"
   },
   "vllm_target_version": "0.29.0",
   "vllm_contract_review": "Pinned source reviewed for completion token-ID logprobs, token limit, cache stats, tokenizer endpoint and launcher flags; not engine execution.",
@@ -92,5 +98,24 @@
   "notes": [
     "Two upstream Starlette test-client deprecation warnings; no test failures.",
     "CPU mock protocol tests are not real model results."
+  ],
+  "archives": [
+    {
+      "archive": "llm_json_verifier-0.1.0-py3-none-any.whl",
+      "entries": 25,
+      "required_files": "present"
+    },
+    {
+      "archive": "llm_json_verifier-0.1.0.tar.gz",
+      "entries": 57,
+      "required_files": "present"
+    }
+  ],
+  "covered_features": [
+    "Per-attempt JSONL records, failures, interruption cleanup and correct metric denominators",
+    "Deterministic labeled regression datasets and evidence placement",
+    "Bounded admission queues, cancellation-after-grant race and HTTP disconnect propagation",
+    "Schema preflight, typed result reconstruction, constant-only outputs and 256-candidate scoring",
+    "Pinned real tokenizer checks for both question and Schema requests on CPU"
   ]
 }

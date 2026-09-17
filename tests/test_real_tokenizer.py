@@ -4,7 +4,9 @@ import os
 
 import pytest
 
+from llm_json_verifier.client import read_schema_request
 from llm_json_verifier.prompts import load_compiler
+from llm_json_verifier.schema_compiler import compile_schema
 from llm_json_verifier.schemas import Option
 
 pytestmark = [
@@ -51,3 +53,17 @@ def test_real_qwen_tokenizer_contract(settings, question, request_body):
                 ]
         assert compiler.compile(request).tokenization_cache_hit
     assert "<think>\n\n</think>" in compiler.render("apple", question)
+    source = read_schema_request("examples/schema.json")
+    plan = compile_schema(source, settings.service)
+    schema_request = plan.request(source)
+    batch = compiler.compile(schema_request)
+    for job in batch.questions:
+        rendered = compiler.render(source.context, job.question)
+        assert list(job.prompt_ids) == compiler.tokenizer.encode(rendered, add_special_tokens=False)
+        for code, token in zip(
+            compiler.codes[: len(job.candidate_ids)], job.candidate_ids, strict=True
+        ):
+            assert compiler.tokenizer.encode(rendered + code, add_special_tokens=False) == [
+                *job.prompt_ids,
+                token,
+            ]
